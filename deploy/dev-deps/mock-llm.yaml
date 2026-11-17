@@ -1,0 +1,33 @@
+# A stand-in for an LLM provider (OpenAI-compatible), so the end-to-end test needs no API key.
+# It echoes the user's message and remembers the last request it received at GET /last, which
+# lets the test prove that personal data was masked before it left the gateway.
+# Code: mock-llm/server.py (the e2e script loads it into the ConfigMap "mock-llm").
+# Exposed as "ollama" so llm-gateway's local route (chat-local -> ollama) points at it.
+apiVersion: v1
+kind: Service
+metadata: { name: ollama }
+spec:
+  selector: { app: mock-llm }
+  ports: [{ port: 11434 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: mock-llm }
+spec:
+  selector: { matchLabels: { app: mock-llm } }
+  template:
+    metadata: { labels: { app: mock-llm, app.kubernetes.io/part-of: gateways } }
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: mock
+          image: python:3.12-alpine
+          command: ["python", "-u", "/app/server.py"]
+          ports: [{ containerPort: 11434 }]
+          readinessProbe:
+            httpGet: { path: /, port: 11434 }
+            periodSeconds: 3
+          volumeMounts: [{ name: code, mountPath: /app }]
+      volumes:
+        - name: code
+          configMap: { name: mock-llm }

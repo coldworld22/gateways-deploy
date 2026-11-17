@@ -1,0 +1,10 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: llm-gateway
+    metrics_path: /actuator/prometheus
+    static_configs: [{ targets: ["llm-gateway:8080"] }]
+  - job_name: integration-gateway
+    metrics_path: /actuator/prometheus
+    static_configs: [{ targets: ["integration-gateway:8080"] }]

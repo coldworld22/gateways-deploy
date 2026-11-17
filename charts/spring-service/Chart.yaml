@@ -1,0 +1,9 @@
+apiVersion: v2
+name: spring-service
+description: One chart for any Spring Boot service with Actuator probes and Prometheus metrics. Used for llm-gateway and integration-gateway.
+type: application
+version: 1.0.0
+appVersion: "0.1.0"
+maintainers:
+  - name: coldworld22
+    url: https://github.com/coldworld22

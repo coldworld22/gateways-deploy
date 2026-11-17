@@ -1,0 +1,15 @@
+# integration-gateway: signed Stripe/WhatsApp webhooks -> MongoDB -> Kafka.
+# Secret "integration-gateway-secrets" provides STRIPE_WEBHOOK_SECRET, META_APP_SECRET,
+# META_VERIFY_TOKEN and GATEWAY_ADMIN_TOKEN.
+image:
+  repository: ghcr.io/coldworld22/integration-gateway
+existingSecret: integration-gateway-secrets
+env:
+  MONGODB_URI: mongodb://mongo:27017/gateway
+  KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+# Webhooks come from Stripe and Meta over the internet, through the ingress controller.
+networkPolicy:
+  ingressNamespace: ingress-nginx
+ingress:
+  enabled: false   # set host + tlsSecret per environment
+  paths: ["/webhooks"]

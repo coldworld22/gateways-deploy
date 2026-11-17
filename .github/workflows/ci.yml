@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Chart lint and schema validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.3
+      - name: Install kubeconform
+        run: |
+          curl -sL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz | tar xz
+          sudo mv kubeconform /usr/local/bin/
+      - name: helm lint
+        run: |
+          for svc in llm-gateway integration-gateway; do
+            helm lint charts/spring-service -f deploy/values/$svc.yaml --strict
+          done
+      - name: Render every combination and validate against Kubernetes 1.31 schemas
+        run: |
+          for svc in llm-gateway integration-gateway; do
+            helm template $svc charts/spring-service -f deploy/values/$svc.yaml | kubeconform -strict -summary -kubernetes-version 1.31.0
+            helm template $svc charts/spring-service -f deploy/values/$svc.yaml -f deploy/values/dev.yaml | kubeconform -strict -summary -kubernetes-version 1.31.0
+            helm template $svc charts/spring-service -f deploy/values/$svc.yaml \
+              --set ingress.enabled=true --set ingress.host=api.example.com --set ingress.tlsSecret=tls \
+              | kubeconform -strict -summary -kubernetes-version 1.31.0
+          done
+          kubeconform -strict -summary -kubernetes-version 1.31.0 deploy/dev-deps/
+      - name: Compose file is valid
+        run: docker compose -f compose/docker-compose.yml config -q
+
+  e2e:
+    name: End-to-end on kind
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.3
+      - uses: docker/setup-buildx-action@v3
+      - name: Build images from the service repositories
+        run: |
+          docker buildx build --load -t llm-gateway:e2e https://github.com/coldworld22/llm-gateway.git#main
+          docker buildx build --load -t integration-gateway:e2e https://github.com/coldworld22/integration-gateway.git#main
+      - uses: helm/kind-action@v1
+        with:
+          version: v0.25.0
+          node_image: kindest/node:v1.31.2
+          cluster_name: gateways
+      - name: Load images into kind
+        run: |
+          kind load docker-image llm-gateway:e2e --name gateways
+          kind load docker-image integration-gateway:e2e --name gateways
+      - name: Deploy and test
+        run: bash scripts/e2e.sh llm-gateway:e2e integration-gateway:e2e

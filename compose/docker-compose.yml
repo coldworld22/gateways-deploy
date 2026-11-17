@@ -1,0 +1,98 @@
+# Everything on one machine: both gateways (built straight from their GitHub repos), their
+# datastores, a mock LLM provider, Prometheus and a provisioned Grafana dashboard.
+#
+#   docker compose -f compose/docker-compose.yml up --build
+#
+#   llm-gateway           http://localhost:8080   (API key: local-demo-key)
+#   integration-gateway   http://localhost:8081
+#   Prometheus            http://localhost:9090
+#   Grafana               http://localhost:3000   (anonymous viewer; dashboard "Gateways")
+name: gateways
+
+x-java: &java
+  restart: unless-stopped
+  mem_limit: 768m
+
+services:
+  llm-gateway:
+    <<: *java
+    build: https://github.com/coldworld22/llm-gateway.git#main
+    ports: ["8080:8080"]
+    environment:
+      SPRING_PROFILES_ACTIVE: demo
+      DATABASE_URL: jdbc:postgresql://postgres:5432/llm_gateway
+      DATABASE_PASSWORD: gateway
+      REDIS_HOST: redis
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434/v1}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      AZURE_OPENAI_API_KEY: ${AZURE_OPENAI_API_KEY:-}
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_started }
+
+  integration-gateway:
+    <<: *java
+    build: https://github.com/coldworld22/integration-gateway.git#main
+    ports: ["8081:8080"]
+    environment:
+      MONGODB_URI: mongodb://mongo:27017/gateway
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-whsec_local_dev_secret}
+      META_APP_SECRET: ${META_APP_SECRET:-local-meta-secret}
+      META_VERIFY_TOKEN: ${META_VERIFY_TOKEN:-local-verify-token}
+      GATEWAY_ADMIN_TOKEN: ${GATEWAY_ADMIN_TOKEN:-change-me}
+    depends_on: [mongo, kafka]
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: llm_gateway
+      POSTGRES_USER: gateway
+      POSTGRES_PASSWORD: gateway
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gateway -d llm_gateway"]
+      interval: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+
+  mongo:
+    image: mongo:7.0
+
+  kafka:
+    image: apache/kafka:3.8.0
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,INTERNAL://:29092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,INTERNAL://kafka:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    ports: ["9092:9092"]
+
+  # Stand-in LLM provider; set OLLAMA_BASE_URL to a real Ollama to use a model instead.
+  ollama:
+    image: python:3.12-alpine
+    command: ["python", "-u", "/app/server.py"]
+    volumes: ["../mock-llm/server.py:/app/server.py:ro"]
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    volumes: ["./prometheus.yml:/etc/prometheus/prometheus.yml:ro"]
+    ports: ["9090:9090"]
+
+  grafana:
+    image: grafana/grafana:11.3.1
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/gateways.json
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports: ["3000:3000"]
+    depends_on: [prometheus]
